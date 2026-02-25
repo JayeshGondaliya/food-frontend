@@ -3,47 +3,73 @@ import { orderAPI } from "@/services/api";
 import StatusBadge from "@/components/StatusBadge";
 import LoadingSpinner from "@/components/LoadingSpinner";
 import toast from "react-hot-toast";
-import { ChevronLeft, ChevronRight } from "lucide-react";
 
-const STATUSES = ["Order Received", "Preparing", "Out for Delivery", "Delivered"];
+// Backend status values (must match exactly)
+const BACKEND_STATUSES = ["received", "preparing", "out_for_delivery", "delivered"] as const;
+type BackendStatus = typeof BACKEND_STATUSES[number];
+
+// Friendly labels for display
+const STATUS_LABELS: Record<BackendStatus, string> = {
+  received: "Order Received",
+  preparing: "Preparing",
+  out_for_delivery: "Out for Delivery",
+  delivered: "Delivered"
+};
+
+interface OrderItem {
+  menuItemId: {
+    _id: string;
+    name: string;
+    price: number;
+  } | null;
+  quantity: number;
+}
 
 interface Order {
   _id: string;
-  items: any[];
-  totalPrice: number;
-  status: string;
-  deliveryDetails?: { name: string; address: string; phone: string };
+  items: OrderItem[];
+  customerName: string;
+  address: string;
+  phone: string;
+  status: BackendStatus; // Now strongly typed
   createdAt: string;
-  user?: { name: string; email: string };
 }
 
 const AdminOrdersPage = () => {
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
-  const [page, setPage] = useState(1);
-  const [hasMore, setHasMore] = useState(true);
+  const [updatingId, setUpdatingId] = useState<string | null>(null);
 
-  const fetchOrders = (p: number) => {
+  const fetchOrders = () => {
     setLoading(true);
-    orderAPI.getAll(p)
-      .then((res) => {
-        const data = res.data.orders || res.data;
-        setOrders(Array.isArray(data) ? data : []);
-        setHasMore(res.data.hasMore ?? data.length >= 10);
-      })
+    orderAPI
+      .getAll()
+      .then((res) => setOrders(res.data))
       .catch(() => toast.error("Failed to load orders"))
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => { fetchOrders(page); }, [page]);
+  useEffect(() => {
+    fetchOrders();
+  }, []);
 
-  const updateStatus = async (id: string, status: string) => {
+  const updateStatus = async (orderId: string, newStatus: BackendStatus) => {
+    // Optimistically update UI
+    const previousOrders = [...orders];
+    setOrders((prev) =>
+      prev.map((o) => (o._id === orderId ? { ...o, status: newStatus } : o))
+    );
+    setUpdatingId(orderId);
+
     try {
-      await orderAPI.updateStatus(id, status);
-      setOrders((prev) => prev.map((o) => (o._id === id ? { ...o, status } : o)));
-      toast.success("Status updated");
-    } catch {
+      await orderAPI.updateStatus(orderId, newStatus); // Send backend value
+      toast.success(`Status updated to ${STATUS_LABELS[newStatus]}`);
+    } catch (error) {
+      // Revert on error
+      setOrders(previousOrders);
       toast.error("Failed to update status");
+    } finally {
+      setUpdatingId(null);
     }
   };
 
@@ -65,38 +91,44 @@ const AdminOrdersPage = () => {
             </tr>
           </thead>
           <tbody className="divide-y divide-border bg-card">
-            {orders.map((order) => (
-              <tr key={order._id}>
-                <td className="px-4 py-3">
-                  <p className="font-medium text-foreground">#{order._id.slice(-6)}</p>
-                  <p className="text-xs text-muted-foreground">{new Date(order.createdAt).toLocaleDateString()}</p>
-                </td>
-                <td className="px-4 py-3 text-foreground">{order.deliveryDetails?.name || order.user?.name || "—"}</td>
-                <td className="px-4 py-3 font-medium text-foreground">${order.totalPrice?.toFixed(2)}</td>
-                <td className="px-4 py-3"><StatusBadge status={order.status} /></td>
-                <td className="px-4 py-3">
-                  <select
-                    value={order.status}
-                    onChange={(e) => updateStatus(order._id, e.target.value)}
-                    className="rounded-md border border-input bg-background px-2 py-1 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
-                  >
-                    {STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
-                  </select>
-                </td>
-              </tr>
-            ))}
+            {orders.map((order) => {
+              const total = order.items.reduce(
+                (sum, item) => sum + (item.menuItemId?.price || 0) * item.quantity,
+                0
+              );
+
+              return (
+                <tr key={order._id} className={updatingId === order._id ? "opacity-50" : ""}>
+                  <td className="px-4 py-3">
+                    <p className="font-medium text-foreground">#{order._id.slice(-6)}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {new Date(order.createdAt).toLocaleDateString()}
+                    </p>
+                  </td>
+                  <td className="px-4 py-3 text-foreground">{order.customerName}</td>
+                  <td className="px-4 py-3 font-medium text-foreground">${total.toFixed(2)}</td>
+                  <td className="px-4 py-3">
+                    <StatusBadge status={order.status} />
+                  </td>
+                  <td className="px-4 py-3">
+                    <select
+                      value={order.status}
+                      onChange={(e) => updateStatus(order._id, e.target.value as BackendStatus)}
+                      disabled={updatingId === order._id}
+                      className="rounded-md border border-input bg-background px-2 py-1 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
+                    >
+                      {BACKEND_STATUSES.map((status) => (
+                        <option key={status} value={status}>
+                          {STATUS_LABELS[status]}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
-      </div>
-
-      <div className="mt-4 flex items-center justify-center gap-4">
-        <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page === 1} className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50">
-          <ChevronLeft className="h-4 w-4" /> Prev
-        </button>
-        <span className="text-sm text-muted-foreground">Page {page}</span>
-        <button onClick={() => setPage((p) => p + 1)} disabled={!hasMore} className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50">
-          Next <ChevronRight className="h-4 w-4" />
-        </button>
       </div>
     </div>
   );
