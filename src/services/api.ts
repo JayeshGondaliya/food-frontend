@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const API_URL = import.meta.env.VITE_API_URL || 'hhttps://food-backend-ak09.onrender.com/api';
+const API_URL = import.meta.env.VITE_API_URL || 'https://food-backend-ak09.onrender.com/api';
 
 export const api = axios.create({
   baseURL: API_URL,
